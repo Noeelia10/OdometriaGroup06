@@ -1,0 +1,4 @@
+string tipo_movimiento  # "lineal" o "rotacion"
+float32 valor           # Distancia en metros o grados de rotación
+---
+bool success              # Confirmación de movimiento completado

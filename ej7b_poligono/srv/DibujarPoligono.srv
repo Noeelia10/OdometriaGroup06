@@ -1,0 +1,4 @@
+int32 n_lados
+float32 longitud
+---
+bool exito
