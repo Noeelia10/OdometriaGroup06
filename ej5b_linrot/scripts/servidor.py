@@ -8,90 +8,90 @@ from tf.transformations import euler_from_quaternion
 import math
 
 # Variables globales
-yaw = 0.0  # Ángulo actual del robot
+yaw = 0.0
 x_actual = None
-x_inicial = None
-Kp_rot = 2.0  # Ganancia para el control proporcional de rotación
-Kp_lin = 2.0  # Ganancia para el control proporcional de traslación
+Kp_rot = 2.0
+Kp_lin = 2.0
 
 def callback_odom(msg):
-    """Función que actualiza la posición y orientación del robot."""
-    global yaw, x_actual, x_inicial
+    """Actualiza la posición y orientación actual del robot."""
+    global yaw, x_actual
 
     x_actual = msg.pose.pose.position.x
     orientation_q = msg.pose.pose.orientation
     orientation_list = [orientation_q.x, orientation_q.y, orientation_q.z, orientation_q.w]
-    (_, _, yaw) = euler_from_quaternion(orientation_list)  # Convertimos a Euler
-
-    # Guardamos la posición inicial la primera vez que se recibe odometría
-    if x_inicial is None:
-        x_inicial = x_actual
+    (_, _, yaw) = euler_from_quaternion(orientation_list)
 
 def manejar_peticion(req):
-    """Función que maneja las solicitudes del cliente."""
-    global yaw, x_actual, x_inicial
+    """Maneja las solicitudes del cliente."""
+    global yaw, x_actual
 
     rospy.loginfo(f"Solicitud recibida: Tipo -> {req.tipo_movimiento}, Valor -> {req.valor}")
 
-    # Publicador de velocidad
     pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)
     rospy.Subscriber('/odom', Odometry, callback_odom)
-
-    # Esperamos a que se reciban datos de odometría
     rospy.sleep(1)
 
     if x_actual is None:
-        rospy.logerr("No se han recibido datos de odometría. Asegúrate de que /odom está publicando.")
+        rospy.logerr("No se han recibido datos de odometría.")
         return EjecutarMovimientoResponse(success=False)
 
     command = Twist()
 
     if req.tipo_movimiento == "lineal":
-        # Movimiento en línea recta con control proporcional
+        # Asignar la posición inicial justo antes de iniciar el movimiento
+        x_inicial = x_actual
         distancia_objetivo = req.valor
-        distancia_recorrida = 0
+        distancia_recorrida = 0.0
 
-        while abs(distancia_objetivo - distancia_recorrida) > 0.02:
+        rospy.loginfo(f"Iniciando movimiento lineal desde {x_inicial:.2f} m")
+
+        while abs(distancia_objetivo - distancia_recorrida) > 0.01 and not rospy.is_shutdown():
             distancia_recorrida = abs(x_actual - x_inicial)
             error = distancia_objetivo - distancia_recorrida
 
-            command.linear.x = Kp_lin * error
+            # Control proporcional con limitación de velocidad
+            vel = Kp_lin * error
+            vel = max(min(vel, 0.2), -0.2)  # Limitar a ±0.2 m/s
+            command.linear.x = vel
+            command.angular.z = 0.0
+
             pub.publish(command)
+            rospy.loginfo(f"Distancia: {distancia_recorrida:.2f} m, Error: {error:.2f} m")
             rospy.sleep(0.1)
 
-        # Detener el movimiento
-        command.linear.x = 0
+        command.linear.x = 0.0
         pub.publish(command)
         rospy.loginfo("Movimiento lineal completado")
         return EjecutarMovimientoResponse(success=True)
 
     elif req.tipo_movimiento == "rotacion":
-        # Convertimos el ángulo de grados a radianes
-        incremento_rotacion = math.radians(req.valor)  
-        target_yaw = yaw + incremento_rotacion  # Ángulo objetivo es relativo al actual
+        incremento_rotacion = math.radians(req.valor)
+        target_yaw = yaw + incremento_rotacion
+        target_yaw = math.atan2(math.sin(target_yaw), math.cos(target_yaw))  # Normalizar
 
-        rospy.loginfo(f"Rotando {req.valor} grados desde la posición actual")
+        rospy.loginfo(f"Rotando {req.valor} grados (objetivo: {math.degrees(target_yaw):.2f}°)")
 
         while not rospy.is_shutdown():
             error = target_yaw - yaw
+            error = math.atan2(math.sin(error), math.cos(error))  # Mantener entre [-π, π]
 
-            # Asegurar que el error está dentro del rango correcto [-π, π]
-            error = math.atan2(math.sin(error), math.cos(error))
-
-            if abs(error) < 0.02:  # Si el error es pequeño, detener el giro
-                command.angular.z = 0
+            if abs(error) < 0.02:
+                command.angular.z = 0.0
                 pub.publish(command)
-                rospy.loginfo(f"Rotación completada: {math.degrees(yaw):.2f} grados")
+                rospy.loginfo(f"Rotación completada: {math.degrees(yaw):.2f}°")
                 return EjecutarMovimientoResponse(success=True)
 
-            command.angular.z = Kp_rot * error  # Control proporcional
+            vel = Kp_rot * error
+            vel = max(min(vel, 1.0), -1.0)  # Limitar a ±1.0 rad/s
+            command.linear.x = 0.0
+            command.angular.z = vel
             pub.publish(command)
             rospy.sleep(0.1)
 
     return EjecutarMovimientoResponse(success=False)
 
 def iniciar_servidor():
-    """Inicia el servicio."""
     rospy.init_node('servidor_movimiento')
     servicio = rospy.Service('ejecutar_movimiento', EjecutarMovimiento, manejar_peticion)
     rospy.loginfo("Servidor de movimiento listo y esperando solicitudes...")
@@ -99,3 +99,4 @@ def iniciar_servidor():
 
 if __name__ == "__main__":
     iniciar_servidor()
+
